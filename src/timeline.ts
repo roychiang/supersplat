@@ -99,29 +99,27 @@ const registerTimelineEvents = (events: Events) => {
         setPlaying(value);
     });
 
-    // keys
-
-    const keys: number[] = [];
+    // keys - now managed by camera poses system
 
     events.function('timeline.keys', () => {
-        return keys;
+        // Get keys from the active camera pose set
+        const poses = events.invoke('camera.poses');
+        return poses ? poses.map((pose: any) => pose.frame) : [];
     });
 
     events.on('timeline.addKey', (frame: number) => {
-        keys.push(frame);
+        // Keys are now managed by camera poses, this event is fired from camera-poses.ts
         events.fire('timeline.keyAdded', frame);
     });
 
     events.on('timeline.removeKey', (index: number) => {
-        keys.splice(index, 1);
+        // Keys are now managed by camera poses, this event is fired from camera-poses.ts
         events.fire('timeline.keyRemoved', index);
     });
 
     events.on('timeline.setKey', (index: number, frame: number) => {
-        if (frame !== keys[index]) {
-            keys[index] = frame;
-            events.fire('timeline.keySet', index, frame);
-        }
+        // Keys are now managed by camera poses, this event is fired from camera-poses.ts
+        events.fire('timeline.keySet', index, frame);
     });
 
     // doc

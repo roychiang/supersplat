@@ -158,6 +158,11 @@ class Ticks extends Container {
             rebuild();
         });
 
+        // rebuild when animation set changes
+        events.on('camera.animationSetChanged', () => {
+            rebuild();
+        });
+
         events.on('timeline.frame', (frame: number) => {
             moveCursor(frame);
         });
@@ -259,9 +264,31 @@ class TimelinePanel extends Container {
             frames.value = framesIn;
         });
 
+        // animation set selector
+        const animationSetSelector = new SelectInput({
+            id: 'animation-set-selector',
+            defaultValue: '1',
+            options: [
+                { v: '1', t: 'Set 1' },
+                { v: '2', t: 'Set 2' },
+                { v: '3', t: 'Set 3' }
+            ]
+        });
+
+        animationSetSelector.on('change', (value: string) => {
+            const setId = parseInt(value, 10);
+            events.fire('camera.switchAnimationSet', setId);
+        });
+
+        // listen for animation set changes to update the selector
+        events.on('camera.animationSetChanged', (setId: number) => {
+            animationSetSelector.value = setId.toString();
+        });
+
         const settingsControls = new Container({
             id: 'settings-controls'
         });
+        settingsControls.append(animationSetSelector);
         settingsControls.append(speed);
         settingsControls.append(frames);
 

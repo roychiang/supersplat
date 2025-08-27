@@ -10,13 +10,36 @@ type Pose = {
     target: Vec3
 };
 
+interface PoseSet {
+    id: number;
+    name: string;
+    poses: Pose[];
+    active: boolean;
+}
+
 const registerCameraPosesEvents = (events: Events) => {
-    const poses: Pose[] = [];
+    // Initialize with 3 animation sets
+    const poseSets: PoseSet[] = [
+        { id: 1, name: 'Animation Set 1', poses: [], active: true },
+        { id: 2, name: 'Animation Set 2', poses: [], active: false },
+        { id: 3, name: 'Animation Set 3', poses: [], active: false }
+    ];
+
+    let activeSetId = 1;
+
+    const getActiveSet = (): PoseSet => {
+        return poseSets.find(set => set.id === activeSetId) || poseSets[0];
+    };
+
+    const getPoses = (): Pose[] => {
+        return getActiveSet().poses;
+    };
 
     let onTimelineChange: (frame: number) => void;
 
     const rebuildSpline = () => {
         const duration = events.invoke('timeline.frames');
+        const poses = getPoses();
 
         const orderedPoses = poses.slice()
         // filter out keys beyond the end of the timeline
@@ -69,6 +92,7 @@ const registerCameraPosesEvents = (events: Events) => {
             return false;
         }
 
+        const poses = getPoses();
         // if a pose already exists at this time, update it
         const idx = poses.findIndex(p => p.frame === pose.frame);
         if (idx !== -1) {
@@ -82,6 +106,7 @@ const registerCameraPosesEvents = (events: Events) => {
     };
 
     const removePose = (index: number) => {
+        const poses = getPoses();
         poses.splice(index, 1);
 
         // remove the timeline key
@@ -90,6 +115,7 @@ const registerCameraPosesEvents = (events: Events) => {
     };
 
     const movePose = (index: number, frame: number) => {
+        const poses = getPoses();
         // remove target frame pose
         const toIndex = poses.findIndex(p => p.frame === frame);
         if (toIndex !== -1) {
@@ -102,8 +128,40 @@ const registerCameraPosesEvents = (events: Events) => {
         events.fire('timeline.setKey', index, frame);
     };
 
+    // Animation set management functions
+    const switchAnimationSet = (setId: number) => {
+        if (setId >= 1 && setId <= 3) {
+            activeSetId = setId;
+            poseSets.forEach((set) => {
+                set.active = set.id === setId;
+            });
+            rebuildSpline();
+            events.fire('camera.animationSetChanged', setId);
+        }
+    };
+
     events.function('camera.poses', () => {
-        return poses;
+        return getPoses();
+    });
+
+    events.function('camera.poseSets', () => {
+        return poseSets;
+    });
+
+    events.function('camera.activeSetId', () => {
+        return activeSetId;
+    });
+
+    events.on('camera.switchAnimationSet', (setId: number) => {
+        switchAnimationSet(setId);
+    });
+
+    events.function('camera.allPoseSets', () => {
+        const result: { [key: string]: Pose[] } = {};
+        poseSets.forEach((set, index) => {
+            result[`set${index}`] = set.poses;
+        });
+        return result;
     });
 
     events.on('camera.addPose', (pose: Pose) => {
@@ -113,6 +171,7 @@ const registerCameraPosesEvents = (events: Events) => {
     events.on('timeline.add', (frame: number) => {
         // get the current camera pose
         const pose = events.invoke('camera.getPose');
+        const poses = getPoses();
 
         addPose({
             name: `camera_${poses.length}`,
@@ -125,6 +184,7 @@ const registerCameraPosesEvents = (events: Events) => {
     events.on('timeline.move', (frameFrom: number, frameTo: number) => {
         if (frameFrom === frameTo) return;
 
+        const poses = getPoses();
         const index = poses.findIndex(p => p.frame === frameFrom);
         if (index !== -1) {
             movePose(index, frameTo);
@@ -141,42 +201,131 @@ const registerCameraPosesEvents = (events: Events) => {
 
     // doc
 
+    events.function('serialize', (filename: string) => {
+        if (filename === 'poseSets') {
+            const result: any = {};
+            poseSets.forEach((set) => {
+                result[`set${set.id - 1}`] = set.poses.map(pose => ({
+                    name: pose.name,
+                    frame: pose.frame,
+                    position: [pose.position.x, pose.position.y, pose.position.z],
+                    target: [pose.target.x, pose.target.y, pose.target.z]
+                }));
+            });
+            // Store active set ID for restoration
+            result.activeSetId = activeSetId;
+            return result;
+        }
+    });
+
+    events.function('deserialize', (filename: string, data: any) => {
+        if (filename === 'poseSets' && data) {
+            // Clear all pose sets
+            poseSets.forEach((set) => {
+                set.poses.length = 0;
+            });
+
+            // Load pose sets from data
+            for (let i = 0; i < 3; i++) {
+                const setKey = `set${i}`;
+                if (data[setKey]) {
+                    const poseData = data[setKey];
+                    const targetSet = poseSets[i];
+                    if (targetSet) {
+                        poseData.forEach((pose: any) => {
+                            targetSet.poses.push({
+                                name: pose.name,
+                                frame: pose.frame,
+                                position: new Vec3(pose.position[0], pose.position[1], pose.position[2]),
+                                target: new Vec3(pose.target[0], pose.target[1], pose.target[2])
+                            });
+                        });
+                    }
+                }
+            }
+
+            // Restore active set ID if available, otherwise default to 1
+            if (data.activeSetId && data.activeSetId >= 1 && data.activeSetId <= 3) {
+                switchAnimationSet(data.activeSetId);
+            } else {
+                switchAnimationSet(1);
+            }
+
+            rebuildSpline();
+        }
+    });
+
+    // Document serialization for multiple pose sets
     events.function('docSerialize.poseSets', (): any[] => {
         const pack3 = (v: Vec3) => [v.x, v.y, v.z];
 
-        if (poses.length === 0) {
+        const result: any[] = [];
+        poseSets.forEach((set, index) => {
+            if (set.poses.length > 0) {
+                result.push({
+                    name: `set${index}`,
+                    poses: set.poses.map((pose) => {
+                        return {
+                            name: pose.name,
+                            frame: pose.frame,
+                            position: pack3(pose.position),
+                            target: pack3(pose.target)
+                        };
+                    })
+                });
+            }
+        });
+
+        // If no poses exist, return empty array
+        if (result.length === 0) {
             return [];
         }
 
-        return [{
-            name: 'set0',
-            poses: poses.map((pose) => {
-                return {
-                    name: pose.name,
-                    frame: pose.frame,
-                    position: pack3(pose.position),
-                    target: pack3(pose.target)
-                };
-            })
-        }];
+        // Add metadata about active set
+        result.push({
+            name: 'metadata',
+            activeSetId: activeSetId
+        });
+
+        return result;
     });
 
-    events.function('docDeserialize.poseSets', (poseSets: any[]) => {
-        if (poseSets.length === 0) {
+    events.function('docDeserialize.poseSets', (docPoseSets: any[]) => {
+        if (!docPoseSets || docPoseSets.length === 0) {
             return;
         }
 
-        const fps = events.invoke('timeline.frameRate');
-
-        // for now, load the first poseSet
-        poseSets[0].poses.forEach((docPose: any, index: number) => {
-            addPose({
-                name: docPose.name,
-                frame: docPose.frame ?? (index * fps),
-                position: new Vec3(docPose.position),
-                target: new Vec3(docPose.target)
-            });
+        // Clear all pose sets
+        poseSets.forEach((set) => {
+            set.poses.length = 0;
         });
+
+        const fps = events.invoke('timeline.frameRate');
+        let restoredActiveSetId = 1;
+
+        docPoseSets.forEach((docSet: any) => {
+            if (docSet.name === 'metadata') {
+                restoredActiveSetId = docSet.activeSetId || 1;
+                return;
+            }
+
+            // Parse set index from name (set0, set1, set2)
+            const setIndex = parseInt(docSet.name.replace('set', ''), 10);
+            if (setIndex >= 0 && setIndex < 3 && poseSets[setIndex]) {
+                docSet.poses.forEach((docPose: any, index: number) => {
+                    poseSets[setIndex].poses.push({
+                        name: docPose.name,
+                        frame: docPose.frame ?? (index * fps),
+                        position: new Vec3(docPose.position),
+                        target: new Vec3(docPose.target)
+                    });
+                });
+            }
+        });
+
+        // Restore active set
+        switchAnimationSet(restoredActiveSetId);
+        rebuildSpline();
     });
 };
 
