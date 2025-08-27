@@ -58,7 +58,8 @@ type ExperienceSettings = {
     background: {
         color?: number[]
     },
-    animTracks: AnimTrack[]
+    animTracks: AnimTrack[],
+    animSetType?: 'all' | 'individual'  // New field to indicate animation set selection type
 };
 
 type ViewerExportSettings = {
@@ -1074,6 +1075,52 @@ const encodeBase64 = (bytes: Uint8Array[]) => {
     return window.btoa(binary);
 };
 
+// Function to inject camera transition and resetComplete event fixes into the JavaScript
+const injectViewerFixes = (jsContent: string): string => {
+    // Check if fixes are already applied to avoid double injection
+    if (jsContent.includes('// Camera transition fixes applied')) {
+        return jsContent;
+    }
+
+    let modifiedJs = jsContent;
+
+    // Fix 1: Remove state.cameraMode = 'anim' from non-reset dots for immediate switching
+    // This allows instant camera transitions between dots 1, 2, 3
+    const dotClickPattern = /(dot\.addEventListener\('click',\s*\(\)\s*=>\s*\{[\s\S]*?else\s*\{[\s\S]*?)state\.cameraMode\s*=\s*['"]anim['"];?([\s\S]*?\}\s*\}\);)/;
+    if (modifiedJs.match(dotClickPattern)) {
+        modifiedJs = modifiedJs.replace(dotClickPattern, '$1$2');
+    }
+
+    // Fix 2: Ensure reset dot fires inputEvent instead of resetComplete for proper UI updates
+    const resetTimeoutPattern = /(if\s*\(\s*animSet\.name\s*===\s*['"]reset['"]\s*\)\s*\{[\s\S]*?setTimeout\s*\([\s\S]*?)events\.fire\s*\(\s*['"]resetComplete['"]\s*\)\s*;([\s\S]*?\}\s*,\s*\d+\s*\);)/;
+    if (modifiedJs.match(resetTimeoutPattern)) {
+        modifiedJs = modifiedJs.replace(resetTimeoutPattern, '$1updateAnimationDots();\n                        showUI();\n                        events.fire(\'inputEvent\', \'reset\');$2');
+    }
+
+    // Fix 3: Reset dot double-click workaround - fire second set of events after delay
+    const resetDotClickPattern = /(if\s*\(\s*setId\s*===\s*['"]reset['"]\s*\)[\s\S]*?setTimeout\s*\(\s*\(\s*\)\s*=>\s*\{[\s\S]*?\}\s*,\s*\d+\s*\);)/;
+    if (modifiedJs.match(resetDotClickPattern)) {
+        modifiedJs = modifiedJs.replace(resetDotClickPattern, (match) => {
+            return match.replace(/(setTimeout\s*\(\s*\(\s*\)\s*=>\s*\{)[\s\S]*?(\}\s*,\s*\d+\s*\);)/, 
+                '$1\n                                events.fire(\'inputEvent\', \'reset\');\n                            $2');
+        });
+    }
+
+    // Fix 4: Remove duplicate resetComplete firing from inputEvent handler
+    const duplicateResetCompletePattern = /(events\.on\s*\(\s*['"]inputEvent['"][\s\S]*?if\s*\([\s\S]*?===\s*['"]reset['"][\s\S]*?)events\.fire\s*\(\s*['"]resetComplete['"]\s*\)\s*;([\s\S]*?\})/;
+    if (modifiedJs.match(duplicateResetCompletePattern)) {
+        modifiedJs = modifiedJs.replace(duplicateResetCompletePattern, '$1$2');
+    }
+
+    // Add marker to indicate fixes have been applied
+    if (!modifiedJs.includes('// Camera transition fixes applied')) {
+        modifiedJs = `// Camera transition fixes applied
+${modifiedJs}`;
+    }
+
+    return modifiedJs;
+};
+
 const serializeViewer = async (splats: Splat[], serializeSettings: SerializeSettings, options: ViewerExportSettings, writer: Writer) => {
     const { experienceSettings } = options;
 
@@ -1093,18 +1140,23 @@ const serializeViewer = async (splats: Splat[], serializeSettings: SerializeSett
         const settings = 'settings: fetch(settingsUrl).then(response => response.json())';
         const content = 'fetch(contentUrl)';
 
+        // Apply viewer fixes to the JavaScript before embedding
+        const fixedIndexJs = injectViewerFixes(indexJs);
+
         const html = indexHtml
         .replace(style, `<style>\n${pad(indexCss, 12)}\n        </style>`)
-        .replace(script, `<script type="module">\n${pad(indexJs, 12)}\n        </script>`)
+        .replace(script, `<script type="module">\n${pad(fixedIndexJs, 12)}\n        </script>`)
         .replace(settings, `settings: ${JSON.stringify(experienceSettings)}`)
         .replace(content, `fetch("data:application/ply;base64,${encodeBase64(plyBuffers)}")`);
 
         await writer.write(new TextEncoder().encode(html));
     } else {
+        // Apply viewer fixes to the JavaScript for package export as well
+        const fixedIndexJs = injectViewerFixes(indexJs);
         const zipWriter = new ZipWriter(writer);
         await zipWriter.file('index.html', indexHtml);
         await zipWriter.file('index.css', indexCss);
-        await zipWriter.file('index.js', indexJs);
+        await zipWriter.file('index.js', fixedIndexJs);
         await zipWriter.file('settings.json', JSON.stringify(experienceSettings, null, 4));
         await zipWriter.file('scene.compressed.ply', plyBuffers);
         await zipWriter.close();

@@ -126,12 +126,37 @@ class ExportPopup extends Container {
             defaultValue: 'none',
             options: [
                 { v: 'none', t: localize('export.animation-none') },
-                { v: 'track', t: localize('export.animation-track') }
+                { v: 'track', t: localize('export.animation-track') },
+                { v: 'all', t: 'All Animation Sets' }
             ]
         });
         const animationRow = new Container({ class: 'row' });
         animationRow.append(animationLabel);
         animationRow.append(animationSelect);
+
+        // animation set selector row
+        const animSetRow = new Container({
+            class: 'row'
+        });
+
+        const animSetLabel = new Label({
+            class: 'label',
+            text: 'Animation Set'
+        });
+
+        const animSetSelect = new SelectInput({
+            class: 'select',
+            defaultValue: 'all',
+            options: [
+                { v: 'all', t: 'Animation Set All' },
+                { v: '1', t: 'Animation Set 1' },
+                { v: '2', t: 'Animation Set 2' },
+                { v: '3', t: 'Animation Set 3' }
+            ]
+        });
+
+        animSetRow.append(animSetLabel);
+        animSetRow.append(animSetSelect);
 
         // viewer: clear color
 
@@ -260,6 +285,7 @@ class ExportPopup extends Container {
         content.append(viewerTypeRow);
         content.append(startRow);
         content.append(animationRow);
+        content.append(animSetRow);
         content.append(colorRow);
         content.append(fovRow);
         content.append(compressRow);
@@ -326,13 +352,13 @@ class ExportPopup extends Container {
 
         const reset = (exportType: ExportType, splatNames: string[], hasPoses: boolean) => {
             const allRows = [
-                viewerTypeRow, startRow, animationRow, colorRow, fovRow, compressRow, splatsRow, bandsRow, filenameRow
+                viewerTypeRow, startRow, animationRow, animSetRow, colorRow, fovRow, compressRow, splatsRow, bandsRow, filenameRow
             ];
 
             const activeRows = {
                 ply: [compressRow, splatsRow, bandsRow, filenameRow],
                 splat: [splatsRow, filenameRow],
-                viewer: [viewerTypeRow, startRow, animationRow, colorRow, fovRow, splatsRow, bandsRow, filenameRow]
+                viewer: [viewerTypeRow, startRow, animationRow, animSetRow, colorRow, fovRow, splatsRow, bandsRow, filenameRow]
             }[exportType];
 
             allRows.forEach((r) => {
@@ -376,8 +402,16 @@ class ExportPopup extends Container {
             startSelect.disabledOptions = hasPoses ? {} : { 'pose': startSelect.options[2].t };
 
             animationSelect.value = hasPoses ? 'track' : 'none';
-            animationSelect.disabledOptions = hasPoses ? { } : { track: animationSelect.options[1].t };
+            animationSelect.disabledOptions = hasPoses ? { } : { track: animationSelect.options[1].t, all: animationSelect.options[2].t };
             animationSelect.enabled = hasPoses;
+
+            // show/hide animation set selector based on animation selection
+            const updateAnimSetVisibility = () => {
+                animSetRow.hidden = animationSelect.value === 'none';
+            };
+            updateAnimSetVisibility();
+
+            animationSelect.on('change', updateAnimSetVisibility);
 
             colorPicker.value = [bgClr.r, bgClr.g, bgClr.b];
 
@@ -387,7 +421,11 @@ class ExportPopup extends Container {
         this.show = (exportType: ExportType, splatNames: string[], showFilenameEdit: boolean) => {
             const frames = events.invoke('timeline.frames');
             const frameRate = events.invoke('timeline.frameRate');
-            const orderedPoses = (events.invoke('camera.poses') as Pose[])
+
+            // Get poses from all animation sets
+            const allPoseSets = events.invoke('camera.allPoseSets') as { [key: string]: Pose[] };
+            const currentPoses = events.invoke('camera.poses') as Pose[];
+            const orderedPoses = currentPoses
             .slice()
             .filter(p => p.frame >= 0 && p.frame < frames)
             .sort((a, b) => a.frame - b.frame);
@@ -438,39 +476,88 @@ class ExportPopup extends Container {
                     switch (animationSelect.value) {
                         case 'none': return 'none';
                         case 'track': return 'animTrack';
+                        case 'all': return 'animTrack'; // Use animTrack for all, but export all tracks
                     }
                 })();
 
-                // extract camera animation
+                // extract camera animation - conditionally export based on animation set selection
                 const animTracks: AnimTrack[] = [];
+                const isAnimSetAll = animSetSelect.value === 'all';
+
                 switch (startAnim) {
                     case 'none':
                         break;
                     case 'animTrack': {
-                        // use camera poses
-                        const times = [];
-                        const position = [];
-                        const target = [];
-                        for (let i = 0; i < orderedPoses.length; ++i) {
-                            const p = orderedPoses[i];
-                            times.push(p.frame);
-                            position.push(p.position.x, p.position.y, p.position.z);
-                            target.push(p.target.x, p.target.y, p.target.z);
-                        }
+                        if (isAnimSetAll) {
+                            // Export all animation sets for 'Animation Set All'
+                            for (let setId = 0; setId < 3; setId++) {
+                                const setKey = `set${setId}`;
+                                const setPoses = allPoseSets[setKey] || [];
+                                const setOrderedPoses = setPoses
+                                .slice()
+                                .filter(p => p.frame >= 0 && p.frame < frames)
+                                .sort((a, b) => a.frame - b.frame);
 
-                        animTracks.push({
-                            name: 'cameraAnim',
-                            duration: frames / frameRate,
-                            frameRate,
-                            target: 'camera',
-                            loopMode: 'repeat',
-                            interpolation: 'spline',
-                            keyframes: {
-                                times,
-                                values: { position, target }
+                                if (setOrderedPoses.length > 0) {
+                                    const times = [];
+                                    const position = [];
+                                    const target = [];
+                                    for (let i = 0; i < setOrderedPoses.length; ++i) {
+                                        const p = setOrderedPoses[i];
+                                        times.push(p.frame);
+                                        position.push(p.position.x, p.position.y, p.position.z);
+                                        target.push(p.target.x, p.target.y, p.target.z);
+                                    }
+
+                                    animTracks.push({
+                                        name: `cameraAnim_set${setId + 1}`,
+                                        duration: frames / frameRate,
+                                        frameRate,
+                                        target: 'camera',
+                                        loopMode: 'repeat',
+                                        interpolation: 'spline',
+                                        keyframes: {
+                                            times,
+                                            values: { position, target }
+                                        }
+                                    });
+                                }
                             }
-                        });
+                        } else {
+                            // Export only the selected individual animation set
+                            const selectedSetId = parseInt(animSetSelect.value, 10) - 1;
+                            const setKey = `set${selectedSetId}`;
+                            const setPoses = allPoseSets[setKey] || [];
+                            const setOrderedPoses = setPoses
+                            .slice()
+                            .filter(p => p.frame >= 0 && p.frame < frames)
+                            .sort((a, b) => a.frame - b.frame);
 
+                            if (setOrderedPoses.length > 0) {
+                                const times = [];
+                                const position = [];
+                                const target = [];
+                                for (let i = 0; i < setOrderedPoses.length; ++i) {
+                                    const p = setOrderedPoses[i];
+                                    times.push(p.frame);
+                                    position.push(p.position.x, p.position.y, p.position.z);
+                                    target.push(p.target.x, p.target.y, p.target.z);
+                                }
+
+                                animTracks.push({
+                                    name: `cameraAnim_set${selectedSetId + 1}`,
+                                    duration: frames / frameRate,
+                                    frameRate,
+                                    target: 'camera',
+                                    loopMode: 'repeat',
+                                    interpolation: 'spline',
+                                    keyframes: {
+                                        times,
+                                        values: { position, target }
+                                    }
+                                });
+                            }
+                        }
                         break;
                     }
                 }
@@ -481,12 +568,23 @@ class ExportPopup extends Container {
                         position: p ? [p.x, p.y, p.z] : null,
                         target: t ? [t.x, t.y, t.z] : null,
                         startAnim,
-                        animTrack: startAnim === 'animTrack' ? 'cameraAnim' : null
+                        animTrack: (() => {
+                            if (startAnim === 'animTrack' && animTracks.length > 0) {
+                                if (animSetSelect.value === 'all') {
+                                    // When 'all' is selected, default to the first animation set
+                                    return 'cameraAnim_set1';
+                                }
+                                const selectedSetId = parseInt(animSetSelect.value, 10) - 1;
+                                return `cameraAnim_set${selectedSetId + 1}`;
+                            }
+                            return null;
+                        })()
                     },
                     background: {
                         color: colorPicker.value.slice()
                     },
-                    animTracks
+                    animTracks,
+                    animSetType: isAnimSetAll ? 'all' : 'individual'  // Pass animation set type to exported HTML
                 };
 
                 return {
