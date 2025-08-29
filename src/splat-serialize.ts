@@ -1086,7 +1086,7 @@ const injectViewerFixes = (jsContent: string): string => {
 
     // Fix 1: Remove state.cameraMode = 'anim' from non-reset dots for immediate switching
     // This allows instant camera transitions between dots 1, 2, 3
-    const dotClickPattern = /(dot\.addEventListener\('click',\s*\(\)\s*=>\s*\{[\s\S]*?else\s*\{[\s\S]*?)state\.cameraMode\s*=\s*['"]anim['"];?([\s\S]*?\}\s*\}\);)/;
+    const dotClickPattern = /(dot\.addEventListener\('click',\s*\(\)\s*=>\s*\{[\s\S]*?else\s*\{[\s\S]*?)state\.cameraMode\s*=\s*['"]anim['"];?\s*([\s\S]*?\}\s*\}\);)/;
     if (modifiedJs.match(dotClickPattern)) {
         modifiedJs = modifiedJs.replace(dotClickPattern, '$1$2');
     }
@@ -1097,25 +1097,9 @@ const injectViewerFixes = (jsContent: string): string => {
         modifiedJs = modifiedJs.replace(resetTimeoutPattern, '$1updateAnimationDots();\n                        showUI();\n                        events.fire(\'inputEvent\', \'reset\');$2');
     }
 
-    // Fix 3: Reset dot double-click workaround - fire second set of events after delay
-    const resetDotClickPattern = /(if\s*\(\s*setId\s*===\s*['"]reset['"]\s*\)[\s\S]*?setTimeout\s*\(\s*\(\s*\)\s*=>\s*\{[\s\S]*?\}\s*,\s*\d+\s*\);)/;
-    if (modifiedJs.match(resetDotClickPattern)) {
-        modifiedJs = modifiedJs.replace(resetDotClickPattern, (match) => {
-            return match.replace(/(setTimeout\s*\(\s*\(\s*\)\s*=>\s*\{)[\s\S]*?(\}\s*,\s*\d+\s*\);)/, 
-                '$1\n                                events.fire(\'inputEvent\', \'reset\');\n                            $2');
-        });
-    }
-
-    // Fix 4: Remove duplicate resetComplete firing from inputEvent handler
-    const duplicateResetCompletePattern = /(events\.on\s*\(\s*['"]inputEvent['"][\s\S]*?if\s*\([\s\S]*?===\s*['"]reset['"][\s\S]*?)events\.fire\s*\(\s*['"]resetComplete['"]\s*\)\s*;([\s\S]*?\})/;
-    if (modifiedJs.match(duplicateResetCompletePattern)) {
-        modifiedJs = modifiedJs.replace(duplicateResetCompletePattern, '$1$2');
-    }
-
     // Add marker to indicate fixes have been applied
     if (!modifiedJs.includes('// Camera transition fixes applied')) {
-        modifiedJs = `// Camera transition fixes applied
-${modifiedJs}`;
+        modifiedJs = '// Camera transition fixes applied\n' + modifiedJs;
     }
 
     return modifiedJs;
@@ -1153,6 +1137,7 @@ const serializeViewer = async (splats: Splat[], serializeSettings: SerializeSett
     } else {
         // Apply viewer fixes to the JavaScript for package export as well
         const fixedIndexJs = injectViewerFixes(indexJs);
+        
         const zipWriter = new ZipWriter(writer);
         await zipWriter.file('index.html', indexHtml);
         await zipWriter.file('index.css', indexCss);
