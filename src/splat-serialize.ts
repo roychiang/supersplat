@@ -1084,20 +1084,58 @@ const injectViewerFixes = (jsContent: string): string => {
 
     let modifiedJs = jsContent;
 
-    // Fix 1: Remove state.cameraMode = 'anim' from non-reset dots for immediate switching
-    // This allows instant camera transitions between dots 1, 2, 3
-    const dotClickPattern = /(dot\.addEventListener\('click',\s*\(\)\s*=>\s*\{[\s\S]*?else\s*\{[\s\S]*?)state\.cameraMode\s*=\s*['"]anim['"];?\s*([\s\S]*?\}\s*\}\);)/;
-    if (modifiedJs.match(dotClickPattern)) {
-        modifiedJs = modifiedJs.replace(dotClickPattern, '$1$2');
+    // Fix 1: Patch setAnimationTracks method to enable smooth transitions between dots 1, 2, 3
+    const setAnimationTracksPattern = /(setAnimationTracks\s*\([^{]*\{[\s\S]*?)(state\.cameraMode\s*=\s*['"]anim['"];)/;
+    if (modifiedJs.match(setAnimationTracksPattern)) {
+        modifiedJs = modifiedJs.replace(setAnimationTracksPattern, (match, beforeCameraMode, cameraModeLine) => {
+            // Check if the fix is already applied
+            if (match.includes('// Camera transition fix')) {
+                return match;
+            }
+            return beforeCameraMode + 
+                   '// Camera transition fix: temporarily switch camera mode to reset transition timer\n' +
+                   '                if (state.cameraMode === \'anim\') {\n' +
+                   '                    state.cameraMode = \'orbit\';\n' +
+                   '                    setTimeout(() => {\n' +
+                   '                        ' + cameraModeLine + '\n' +
+                   '                    }, 1);\n' +
+                   '                } else {\n' +
+                   '                    ' + cameraModeLine + '\n' +
+                   '                }';
+        });
     }
 
-    // Fix 2: Ensure reset dot fires inputEvent instead of resetComplete for proper UI updates
+    // Fix 2: Patch dot click handler to enable smooth transitions from dot 0 to dots 1, 2, 3
+    const dotClickPattern = /(if\s*\(\s*setId\s*!==\s*['"]reset['"]\s*\)[\s\S]*?)(viewer\.setAnimationTracks[\s\S]*?)(state\.cameraMode\s*=\s*['"]anim['"];)/;
+    if (modifiedJs.match(dotClickPattern)) {
+        modifiedJs = modifiedJs.replace(dotClickPattern, (match, beforeSetTracks, setTracksCall, cameraModeLine) => {
+            // Check if the fix is already applied
+            if (match.includes('// Dot transition fix')) {
+                return match;
+            }
+            return beforeSetTracks +
+                   '// Dot transition fix: detect orbit to anim mode transitions\n' +
+                   '                            const wasOrbitMode = state.cameraMode === \'orbit\';\n' +
+                   '                            ' + setTracksCall +
+                   '                            if (wasOrbitMode) {\n' +
+                   '                                // Temporarily switch to fly mode to trigger transition timer reset\n' +
+                   '                                state.cameraMode = \'fly\';\n' +
+                   '                                setTimeout(() => {\n' +
+                   '                                    ' + cameraModeLine + '\n' +
+                   '                                }, 1);\n' +
+                   '                            } else {\n' +
+                   '                                ' + cameraModeLine + '\n' +
+                   '                            }';
+        });
+    }
+
+    // Fix 3: Ensure reset dot fires inputEvent instead of resetComplete for proper UI updates
     const resetTimeoutPattern = /(if\s*\(\s*animSet\.name\s*===\s*['"]reset['"]\s*\)\s*\{[\s\S]*?setTimeout\s*\([\s\S]*?)events\.fire\s*\(\s*['"]resetComplete['"]\s*\)\s*;([\s\S]*?\}\s*,\s*\d+\s*\);)/;
     if (modifiedJs.match(resetTimeoutPattern)) {
         modifiedJs = modifiedJs.replace(resetTimeoutPattern, '$1updateAnimationDots();\n                        showUI();\n                        events.fire(\'inputEvent\', \'reset\');$2');
     }
 
-    // Fix 3: Reset dot double-click workaround - fire two events automatically
+    // Fix 4: Reset dot double-click workaround - fire two events automatically
     const resetDotClickPattern = /(if\s*\(\s*setId\s*===\s*['"]reset['"]\s*\)\s*\{[\s\S]*?events\.fire\s*\(\s*['"]inputEvent['"]\s*,\s*['"]reset['"]\s*\)\s*;[\s\S]*?events\.fire\s*\(\s*['"]resetComplete['"]\s*\)\s*;)/;
     if (modifiedJs.match(resetDotClickPattern)) {
         modifiedJs = modifiedJs.replace(resetDotClickPattern, (match) => {
@@ -1105,7 +1143,7 @@ const injectViewerFixes = (jsContent: string): string => {
         });
     }
 
-    // Fix 4: Remove duplicate resetComplete firing from inputEvent handler
+    // Fix 5: Remove duplicate resetComplete firing from inputEvent handler
     const duplicateResetCompletePattern = /(events\.on\s*\(\s*['"]inputEvent['"]\s*,\s*\([^)]*\)\s*=>\s*\{[\s\S]*?case\s*['"]reset['"]\s*:[\s\S]*?)events\.fire\s*\(\s*['"]resetComplete['"]\s*\)\s*;([\s\S]*?break\s*;)/;
     if (modifiedJs.match(duplicateResetCompletePattern)) {
         modifiedJs = modifiedJs.replace(duplicateResetCompletePattern, '$1// Removed duplicate resetComplete firing to prevent race condition$2');
