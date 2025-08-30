@@ -158,6 +158,29 @@ class ExportPopup extends Container {
         animSetRow.append(animSetLabel);
         animSetRow.append(animSetSelect);
 
+        // animation loop mode
+
+        const loopModeRow = new Container({
+            class: 'row'
+        });
+
+        const loopModeLabel = new Label({
+            class: 'label',
+            text: 'Loop Mode'
+        });
+
+        const loopModeSelect = new SelectInput({
+            class: 'select',
+            defaultValue: 'repeat',
+            options: [
+                { v: 'repeat', t: 'Repeat' },
+                { v: 'none', t: 'Play Once' }
+            ]
+        });
+
+        loopModeRow.append(loopModeLabel);
+        loopModeRow.append(loopModeSelect);
+
         // viewer: clear color
 
         const colorRow = new Container({
@@ -286,6 +309,7 @@ class ExportPopup extends Container {
         content.append(startRow);
         content.append(animationRow);
         content.append(animSetRow);
+        content.append(loopModeRow);
         content.append(colorRow);
         content.append(fovRow);
         content.append(compressRow);
@@ -352,13 +376,13 @@ class ExportPopup extends Container {
 
         const reset = (exportType: ExportType, splatNames: string[], hasPoses: boolean) => {
             const allRows = [
-                viewerTypeRow, startRow, animationRow, animSetRow, colorRow, fovRow, compressRow, splatsRow, bandsRow, filenameRow
+                viewerTypeRow, startRow, animationRow, animSetRow, loopModeRow, colorRow, fovRow, compressRow, splatsRow, bandsRow, filenameRow
             ];
 
             const activeRows = {
                 ply: [compressRow, splatsRow, bandsRow, filenameRow],
                 splat: [splatsRow, filenameRow],
-                viewer: [viewerTypeRow, startRow, animationRow, animSetRow, colorRow, fovRow, splatsRow, bandsRow, filenameRow]
+                viewer: [viewerTypeRow, startRow, animationRow, animSetRow, loopModeRow, colorRow, fovRow, splatsRow, bandsRow, filenameRow]
             }[exportType];
 
             allRows.forEach((r) => {
@@ -405,9 +429,11 @@ class ExportPopup extends Container {
             animationSelect.disabledOptions = hasPoses ? { } : { track: animationSelect.options[1].t, all: animationSelect.options[2].t };
             animationSelect.enabled = hasPoses;
 
-            // show/hide animation set selector based on animation selection
+            // show/hide animation set selector and loop mode based on animation selection
             const updateAnimSetVisibility = () => {
-                animSetRow.hidden = animationSelect.value === 'none';
+                const isAnimationNone = animationSelect.value === 'none';
+                animSetRow.hidden = isAnimationNone;
+                loopModeRow.hidden = isAnimationNone;
             };
             updateAnimSetVisibility();
 
@@ -473,6 +499,11 @@ class ExportPopup extends Container {
                 const t = pose?.target;
 
                 const startAnim = (() => {
+                    // If 'Current Viewport' is selected, always use 'none' to respect viewport position
+                    if (startSelect.value === 'viewport') {
+                        return 'none';
+                    }
+                    
                     switch (animationSelect.value) {
                         case 'none': return 'none';
                         case 'track': return 'animTrack';
@@ -484,10 +515,9 @@ class ExportPopup extends Container {
                 const animTracks: AnimTrack[] = [];
                 const isAnimSetAll = animSetSelect.value === 'all';
 
-                switch (startAnim) {
-                    case 'none':
-                        break;
-                    case 'animTrack': {
+                // Always export animation tracks if animSetAll is true (for dot functionality)
+                // or if startAnim is 'animTrack'
+                if (isAnimSetAll || startAnim === 'animTrack') {
                         if (isAnimSetAll) {
                             // Export all animation sets for 'Animation Set All'
                             for (let setId = 0; setId < 3; setId++) {
@@ -514,7 +544,7 @@ class ExportPopup extends Container {
                                         duration: frames / frameRate,
                                         frameRate,
                                         target: 'camera',
-                                        loopMode: 'repeat',
+                                        loopMode: loopModeSelect.value as 'repeat' | 'none',
                                         interpolation: 'spline',
                                         keyframes: {
                                             times,
@@ -549,7 +579,7 @@ class ExportPopup extends Container {
                                     duration: frames / frameRate,
                                     frameRate,
                                     target: 'camera',
-                                    loopMode: 'repeat',
+                                    loopMode: loopModeSelect.value as 'repeat' | 'none',
                                     interpolation: 'spline',
                                     keyframes: {
                                         times,
@@ -558,8 +588,6 @@ class ExportPopup extends Container {
                                 });
                             }
                         }
-                        break;
-                    }
                 }
 
                 const experienceSettings: ExperienceSettings = {
@@ -569,10 +597,12 @@ class ExportPopup extends Container {
                         target: t ? [t.x, t.y, t.z] : null,
                         startAnim,
                         animTrack: (() => {
-                            if (startAnim === 'animTrack' && animTracks.length > 0) {
+                            // Set animTrack if we have animation tracks (for dot functionality)
+                            // or if startAnim is explicitly 'animTrack'
+                            if (animTracks.length > 0) {
                                 if (animSetSelect.value === 'all') {
-                                    // When 'all' is selected, default to the first animation set
-                                    return 'cameraAnim_set1';
+                                    // When 'all' is selected, use null to let viewer handle reset position
+                                    return null;
                                 }
                                 const selectedSetId = parseInt(animSetSelect.value, 10) - 1;
                                 return `cameraAnim_set${selectedSetId + 1}`;
